@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Models\User;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
@@ -27,7 +28,7 @@ class LoginRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'email' => ['required', 'string', 'email'],
+            'identifier' => ['required', 'string'],
             'password' => ['required', 'string'],
         ];
     }
@@ -39,17 +40,27 @@ class LoginRequest extends FormRequest
      */
     public function authenticate(): void
     {
-        $this->ensureIsNotRateLimited();
+        $credentials = $this->only('password');
 
-        if (! Auth::attempt($this->only('email', 'password'), $this->boolean('remember'))) {
-            RateLimiter::hit($this->throttleKey());
+        $user = User::where('email', $this->identifier)
+            ->orWhereHas('tenagaKependidikan', function ($query) {
+                $query->where('nip', $this->identifier);
+            })
+            ->first();
 
+        if (!$user || !in_array($user->role, ['operator', 'kesiswaan', 'waliKelas'])) {
             throw ValidationException::withMessages([
-                'email' => trans('auth.failed'),
+                'identifier' => __('Pengguna tidak ditemukan atau role tidak sesuai.'),
             ]);
         }
 
-        RateLimiter::clear($this->throttleKey());
+        if (!Auth::validate(['email' => $user->email, 'password' => $this->password])) {
+            throw ValidationException::withMessages([
+                'identifier' => __('Kredensial yang diberikan tidak benar.'),
+            ]);
+        }
+
+        Auth::login($user);
     }
 
     /**
@@ -80,6 +91,6 @@ class LoginRequest extends FormRequest
      */
     public function throttleKey(): string
     {
-        return Str::transliterate(Str::lower($this->string('email')).'|'.$this->ip());
+        return Str::transliterate(Str::lower($this->string('email')) . '|' . $this->ip());
     }
 }
